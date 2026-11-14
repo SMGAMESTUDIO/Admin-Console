@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Ludo Crown Admin</title>
+<style>
+  :root { --bg:#0F0B2E; --card:#1B1442; --gold:#FFC107; --text:#EDE9FF; --muted:#B7B0D8; --red:#E53935; --green:#43A047; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: Arial, Helvetica, sans-serif; background: var(--bg); color: var(--text); }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 18px 14px 60px; }
+  h1 { margin: 6px 0 14px; font-size: 24px; }
+  .card { background: var(--card); border-radius: 14px; padding: 14px 16px; margin-top: 10px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .stat b { display:block; font-size: 26px; color: var(--gold); }
+  .stat span { color: var(--muted); font-size: 12px; }
+  .tabs { display:flex; gap:8px; margin: 10px 0; }
+  button, select, input { font: inherit; }
+  button { border:0; border-radius: 12px; padding: 10px 14px; background:#33295E; color: var(--text); cursor:pointer; }
+  button.primary { background: var(--gold); color:#1A1040; font-weight:bold; }
+  button.danger { background: var(--red); color:#fff; }
+  button.good { background: var(--green); color:#fff; }
+  button.active { background: var(--gold); color:#1A1040; font-weight:bold; }
+  input, select { background:#241A4E; color: var(--text); border:1px solid #33295E; border-radius: 10px; padding: 10px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; align-items:center; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:10px; background:#33295E; font-size:12px; margin-right:6px; }
+  .err { color:#FF8A80; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+// ===== PASTE HERE (same values as SupabaseConfig.java). Public anon key only. =====
+const SUPABASE_URL = "";
+const SUPABASE_KEY = "";
+// ==================================================================================
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const app = document.getElementById('app');
+let tab = 'overview', reportFilter = 'open';
+
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const k in (attrs || {})) {
+    if (k === 'class') e.className = attrs[k];
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), attrs[k]);
+    else e.setAttribute(k, attrs[k]);
+  }
+  for (const c of kids.flat()) if (c != null) e.append(c.nodeType ? c : document.createTextNode(String(c)));
+  return e;
+}
+function show(...nodes) { app.replaceChildren(...nodes); }
+async function rpc(name, args) {
+  const { data, error } = await sb.rpc(name, args || {});
+  if (error) throw error;
+  return data;
+}
+function fmt(d) { try { return new Date(d).toLocaleString(); } catch (e) { return d; } }
+
+async function boot() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return show(h('h1', {}, 'Set SUPABASE_URL and SUPABASE_KEY in this file.'));
+  const { data } = await sb.auth.getSession();
+  if (!data.session) return loginView();
+  try {
+    await rpc('admin_stats');
+  } catch (e) {
+    return deniedView(data.session.user.email);
+  }
+  dashboard();
+}
+
+function loginView() {
+  show(h('h1', {}, '👑 Ludo Crown Admin'),
+    h('div', { class: 'card' },
+      h('p', { class: 'muted' }, 'Sign in with the admin Google account.'),
+      h('button', { class: 'primary', onclick: () => sb.auth.signInWithOAuth({
+        provider: 'google', options: { redirectTo: location.origin + location.pathname } }) }, 'Continue with Google')));
+}
+
+function deniedView(email) {
+  show(h('h1', {}, '⛔ Access denied'),
+    h('div', { class: 'card' },
+      h('p', {}, 'The account ' + email + ' is not an admin.'),
+      h('button', { onclick: async () => { await sb.auth.signOut(); loginView(); } }, 'Sign out')));
+}
+
+function dashboard() {
+  const tabs = h('div', { class: 'tabs' },
+    ['overview', 'reports', 'players'].map(t =>
+      h('button', { class: tab === t ? 'active' : '', onclick: () => { tab = t; dashboard(); } }, t[0].toUpperCase() + t.slice(1))),
+    h('button', { onclick: async () => { await sb.auth.signOut(); loginView(); } }, 'Sign out'));
+  const body = h('div', {});
+  show(h('h1', {}, '👑 Ludo Crown Admin'), tabs, body);
+  if (tab === 'overview') overview(body);
+  else if (tab === 'reports') reports(body);
+  else players(body);
+}
+
+async function overview(body) {
+  body.append(h('p', { class: 'muted' }, 'Loading...'));
+  try {
+    const s = await rpc('admin_stats');
+    const items = [['Players', s.players], ['New (7 days)', s.new_7d], ['Matches played', s.matches_total],
+      ['Matches (24h)', s.matches_24h], ['Active rooms', s.active_rooms], ['Open reports', s.open_reports],
+      ['Blocks', s.blocks], ['Banned', s.banned]];
+    body.replaceChildren(h('div', { class: 'grid' },
+      items.map(i => h('div', { class: 'card stat' }, h('b', {}, i[1]), h('span', {}, i[0])))));
+  } catch (e) { body.replaceChildren(h('p', { class: 'err' }, e.message)); }
+}
+
+async function reports(body) {
+  const sel = h('select', { onchange: (e) => { reportFilter = e.target.value; dashboard(); } },
+    ['open', 'resolved', 'dismissed', 'all'].map(v => {
+      const o = h('option', { value: v }, v); if (v === reportFilter) o.selected = true; return o; }));
+  const list = h('div', {});
+  body.replaceChildren(h('div', { class: 'row' }, sel), list);
+  list.append(h('p', { class: 'muted' }, 'Loading...'));
+  try {
+    const rows = await rpc('admin_reports', { p_status: reportFilter });
+    if (!rows.length) return list.replaceChildren(h('p', { class: 'muted' }, 'No reports.'));
+    list.replaceChildren(...rows.map(r => h('div', { class: 'card' },
+      h('div', {}, h('span', { class: 'pill' }, r.reason), h('span', { class: 'pill' }, r.status),
+        h('span', { class: 'muted' }, fmt(r.created_at))),
+      h('p', {}, r.reporter_name + ' (' + r.reporter_id + ') reported ' + r.reported_name + ' (' + r.reported_id + ')'),
+      h('p', { class: 'muted' }, 'Total reports against this player: ' + r.reported_total + (r.room_code ? ' • Room ' + r.room_code : '')),
+      r.details ? h('p', {}, '“' + r.details + '”') : null,
+      r.admin_note ? h('p', { class: 'muted' }, 'Note: ' + r.admin_note) : null,
+      h('div', { class: 'row' },
+        r.status === 'open' ? h('button', { class: 'good', onclick: () => resolve(r.id, 'resolved') }, 'Resolve') : null,
+        r.status === 'open' ? h('button', { onclick: () => resolve(r.id, 'dismissed') }, 'Dismiss') : null,
+        h('button', { class: 'danger', onclick: () => ban(r.reported_id, true, r.reported_name) }, 'Ban reported'),
+        h('button', { onclick: () => { tab = 'players'; window.__lookup = r.reported_id; dashboard(); } }, 'Look up')))));
+  } catch (e) { list.replaceChildren(h('p', { class: 'err' }, e.message)); }
+}
+
+async function resolve(id, status) {
+  const note = prompt('Note (optional):') || '';
+  try { await rpc('admin_resolve_report', { p_id: id, p_status: status, p_note: note }); dashboard(); }
+  catch (e) { alert(e.message); }
+}
+
+async function ban(playerId, doBan, name) {
+  if (!confirm((doBan ? 'Ban ' : 'Unban ') + name + ' (' + playerId + ')?')) return;
+  try { const r = await rpc('admin_set_ban', { p_player_id: playerId, p_ban: doBan }); alert(r); dashboard(); }
+  catch (e) { alert(e.message); }
+}
+
+function players(body) {
+  const input = h('input', { placeholder: 'LC-XXXXXXXX', maxlength: '11' });
+  const out = h('div', {});
+  const go = async () => {
+    const id = input.value.trim().toUpperCase();
+    out.replaceChildren(h('p', { class: 'muted' }, 'Searching...'));
+    try {
+      const p = await rpc('admin_find_player', { p_player_id: id });
+      if (!p.found) return out.replaceChildren(h('p', { class: 'muted' }, 'No player with this ID.'));
+      out.replaceChildren(h('div', { class: 'card' },
+        h('h3', {}, p.username + ' • ' + p.player_id),
+        h('p', { class: 'muted' }, 'Joined ' + fmt(p.created_at)),
+        h('p', {}, 'Online matches: ' + p.games + ' • Wins: ' + p.wins),
+        h('p', {}, 'Reports against: ' + p.reports_against + ' • Blocked by: ' + p.blocked_by),
+        h('p', {}, p.banned ? '🚫 BANNED' : '✅ Active', p.is_admin ? '  (admin)' : ''),
+        p.is_admin ? null : h('div', { class: 'row' }, p.banned
+          ? h('button', { class: 'good', onclick: () => ban(p.player_id, false, p.username) }, 'Unban')
+          : h('button', { class: 'danger', onclick: () => ban(p.player_id, true, p.username) }, 'Ban'))));
+    } catch (e) { out.replaceChildren(h('p', { class: 'err' }, e.message)); }
+  };
+  body.replaceChildren(h('div', { class: 'row' }, input, h('button', { class: 'primary', onclick: go }, 'Search')), out);
+  if (window.__lookup) { input.value = window.__lookup; window.__lookup = null; go(); }
+}
+
+sb.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_IN' || ev === 'SIGNED_OUT') boot(); });
+boot();
+</script>
+</body>
+</html>
